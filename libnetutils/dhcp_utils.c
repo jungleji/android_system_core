@@ -57,6 +57,14 @@ void get_p2p_interface_replacement(const char *interface, char *p2p_interface) {
     }
 }
 
+void get_eth_interface_replacement(const char *interface, char *eth_interface) {
+    if (strncmp(interface, "eth_", 4) == 0) {
+        memset(eth_interface, 0, MAX_INTERFACE_LENGTH);
+        sprintf(eth_interface, "eth");
+        strncpy(interface, interface + 4, strlen(interface + 4) + 1);
+    }
+}
+
 /*
  * Wait for a system property to be assigned a specified value.
  * If desired_value is NULL, then just wait for the property to
@@ -194,9 +202,17 @@ int dhcp_do_request(const char *interface,
 
     get_p2p_interface_replacement(interface, p2p_interface);
 
-    snprintf(result_prop_name, sizeof(result_prop_name), "%s.%s.result",
-            DHCP_PROP_NAME_PREFIX,
-            p2p_interface);
+    get_eth_interface_replacement(interface, p2p_interface);
+
+    if (strncmp(interface, "eth", 3) == 0) {
+        snprintf(result_prop_name, sizeof(result_prop_name), "%s.%s.result",
+                 DHCP_PROP_NAME_PREFIX,
+                 interface);
+    } else {
+        snprintf(result_prop_name, sizeof(result_prop_name), "%s.%s.result",
+                 DHCP_PROP_NAME_PREFIX,
+                 p2p_interface);
+    }
 
     snprintf(daemon_prop_name, sizeof(daemon_prop_name), "%s_%s",
             DAEMON_PROP_NAME,
@@ -207,11 +223,11 @@ int dhcp_do_request(const char *interface,
 
     /* Start the daemon and wait until it's ready */
     if (property_get(HOSTNAME_PROP_NAME, prop_value, NULL) && (prop_value[0] != '\0'))
-        snprintf(daemon_cmd, sizeof(daemon_cmd), "%s_%s:-f %s -h %s %s", DAEMON_NAME,
-                 p2p_interface, DHCP_CONFIG_PATH, prop_value, interface);
+        snprintf(daemon_cmd, sizeof(daemon_cmd), "%s_%s:-h %s %s", DAEMON_NAME, p2p_interface,
+                 prop_value, interface);
     else
-        snprintf(daemon_cmd, sizeof(daemon_cmd), "%s_%s:-f %s %s", DAEMON_NAME,
-                 p2p_interface, DHCP_CONFIG_PATH, interface);
+        snprintf(daemon_cmd, sizeof(daemon_cmd), "%s_%s:%s", DAEMON_NAME, p2p_interface, interface);
+
     memset(prop_value, '\0', PROPERTY_VALUE_MAX);
     property_set(ctrl_prop, daemon_cmd);
     if (wait_for_property(daemon_prop_name, desired_status, 10) < 0) {
@@ -265,9 +281,17 @@ int dhcp_stop(const char *interface)
 
     get_p2p_interface_replacement(interface, p2p_interface);
 
-    snprintf(result_prop_name, sizeof(result_prop_name), "%s.%s.result",
-            DHCP_PROP_NAME_PREFIX,
-            p2p_interface);
+    get_eth_interface_replacement(interface, p2p_interface);
+
+    if (strncmp(interface, "eth", 3) == 0) {
+        snprintf(result_prop_name, sizeof(result_prop_name), "%s.%s.result",
+                 DHCP_PROP_NAME_PREFIX,
+                 interface);
+    } else {
+        snprintf(result_prop_name, sizeof(result_prop_name), "%s.%s.result",
+                 DHCP_PROP_NAME_PREFIX,
+                 p2p_interface);
+    }
 
     snprintf(daemon_prop_name, sizeof(daemon_prop_name), "%s_%s",
             DAEMON_PROP_NAME,
