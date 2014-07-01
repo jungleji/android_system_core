@@ -10,6 +10,7 @@ LOCAL_SRC_FILES:= \
 	property_service.c \
 	util.c \
 	parser.c \
+	logwrapper.c \
 	keychords.c \
 	signal_handler.c \
 	init_parser.c \

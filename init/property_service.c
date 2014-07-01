@@ -102,6 +102,11 @@ struct {
     { "wc_transport.",     AID_BLUETOOTH,   AID_SYSTEM },
     { "net.pdp",          AID_RADIO,    AID_RADIO },
     { "service.bootanim.exit", AID_GRAPHICS, 0 },
+    { "sys_graphic.",     AID_MEDIA,   0 },//add for sys_graphic.cam_hal.ver in cameraHal
+    { "persist.audio.",   AID_SYSTEM,   0 },
+    { "persist.audio.",   AID_MEDIA,   0 },
+    { "media.",           AID_SYSTEM,   0 },
+    { "media.",           AID_MEDIA,   0 },
 #ifdef PROPERTY_PERMS_APPEND
 PROPERTY_PERMS_APPEND
 #endif
@@ -242,6 +247,11 @@ static int check_perms(const char *name, unsigned int uid, unsigned int gid, cha
 {
     int i;
     unsigned int app_id;
+
+    //oops,add by xzj to let TestCase set this property to GPU library for CTS
+    if(strcmp("sys.gmali.skipframes",name)==0) {
+        return 1;
+    }
 
     if(!strncmp(name, "ro.", 3))
         name +=3;
@@ -597,9 +607,33 @@ void load_persist_props(void)
     load_persistent_properties();
 }
 
+char* get_module_param(char* name)
+{
+    FILE *fp;
+    int flen;
+    char buff[512];
+    char node[100] = "/sys/module/board/parameters/";
+    strcat(node,name);
+
+    if((fp=fopen(node,"r"))!=NULL){
+        fgets(buff,512,fp);
+        fclose(fp);
+
+        if(buff[strlen(buff)-1] == '\n')
+            {
+                buff[strlen(buff)-1] = '\0';
+            }
+        ERROR("---------%s == %s\n",name,buff);
+        return buff;
+    }
+
+    return "-1";
+}
+
 void start_property_service(void)
 {
     int fd;
+    char apdataonly[PROP_VALUE_MAX];
 
     load_properties_from_file(PROP_PATH_SYSTEM_BUILD);
     load_properties_from_file(PROP_PATH_SYSTEM_DEFAULT);
@@ -614,6 +648,24 @@ void start_property_service(void)
 
     listen(fd, 8);
     property_set_fd = fd;
+
+    property_set("ro.ap_mdm", get_module_param("ap_mdm"));
+    property_set("ro.ap_has_alsa", get_module_param("ap_has_alsa"));
+    property_set("ro.ap_data_only", get_module_param("ap_data_only"));
+    property_set("ro.ap_has_earphone", get_module_param("ap_has_earphone"));
+
+    property_get("ro.ap_data_only", apdataonly);
+
+    if(strcmp(apdataonly,"1") == 0){       //voice+sms+data
+        property_set("ro.voice.capable","true");
+        property_set("ro.sms.capable","true");
+    }else if(strcmp(apdataonly,"3") == 0){ //sms+data
+        property_set("ro.voice.capable","false");
+        property_set("ro.sms.capable","true");
+    }else{					  //default:data only
+        property_set("ro.voice.capable","false");
+        property_set("ro.sms.capable","false");
+    }
 }
 
 int get_property_set_fd()
