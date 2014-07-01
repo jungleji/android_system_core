@@ -50,7 +50,8 @@
 #define KEY_LOC_PROP   "ro.crypto.keyfile.userdata"
 #define KEY_IN_FOOTER  "footer"
 
-#define E2FSCK_BIN      "/system/bin/e2fsck"
+#define E2FSCK_BIN      "/sbin/e2fsck"
+#define RESIZE2FS_BIN   "/sbin/resize2fs"
 #define MKSWAP_BIN      "/system/bin/mkswap"
 
 #define FSCK_LOG_FILE   "/dev/fscklogs/log"
@@ -87,6 +88,7 @@ static struct flag_list mount_flags[] = {
 static struct flag_list fs_mgr_flags[] = {
     { "wait",        MF_WAIT },
     { "check",       MF_CHECK },
+    { "resize",      MF_RESIZE },
     { "encryptable=",MF_CRYPT },
     { "nonremovable",MF_NONREMOVABLE },
     { "voldmanaged=",MF_VOLDMANAGED},
@@ -137,6 +139,118 @@ static int wait_for_file(const char *filename, int timeout)
         usleep(10000);
 
     return ret;
+}
+
+static void resize_fs(char *blk_dev, char *type)
+{
+    pid_t pid;
+    int status;
+    int err;
+    char *resize2fs_argv[3] = {
+        RESIZE2FS_BIN,
+        blk_dev,
+        NULL
+    };
+
+    INFO("---------------resize_fs blk_dev %s, type %s", blk_dev, type);
+    /* Check for the types of filesystems we know how to check */
+    if (!strcmp(type, "ext2") || !strcmp(type, "ext3") || !strcmp(type, "ext4")) {
+        INFO("Running %s on %s\n", RESIZE2FS_BIN, blk_dev);
+        err = android_fork_execvp_ext(ARRAY_SIZE(resize2fs_argv), resize2fs_argv,
+                                      &status, true, LOG_KLOG, false, NULL);
+        if (err < 0) {
+            /* No need to check for error in fork, we can't really handle it now */
+            ERROR("Failed trying to run %s\n", RESIZE2FS_BIN);
+        }
+    }
+
+    return;
+}
+
+static char *get_linkname(const char *path)
+{
+    struct stat sb;
+    char *linkname = NULL;
+    ssize_t r;
+
+    if (lstat(path, &sb) == -1) {
+        goto errout;
+    }
+
+    linkname = (char *)malloc(sb.st_size + 1);
+    if (linkname == NULL)
+        goto errout;
+
+    r = readlink(path, linkname, sb.st_size + 1);
+    if (r < 0 || r > sb.st_size)
+        goto errout;
+
+    linkname[sb.st_size] = '\0';
+
+    return linkname;
+
+errout:
+    if (linkname)
+        free(linkname);
+
+    return NULL;
+}
+
+
+static void parse_link_device(struct fstab_rec *rec)
+{
+#define MTD_PATH_FORMAT "/devices/virtual/mtd/mtd%d/mtdblock%d"
+#define EMMC_PATH "/devices/platform/emmc/mmc_host/mmc"
+    char *path = NULL;
+    char *part_name = NULL;
+    int mmc_num;
+    int part_num;
+    char is_emmc = 0;
+
+    if (!fs_mgr_is_voldmanaged(rec))
+        return;
+
+    path = get_linkname(rec->blk_device);
+    if (NULL == path) {
+        ERROR("%s : path = NULL", __func__);
+        goto errout;
+    }
+    ERROR("%s %s: in", __func__, path);
+
+    if (NULL != (part_name = strstr(path, "mtdblock"))) {
+        part_num = atoi(part_name + 8);
+    } else if (NULL != (part_name = strstr(path, "mmcblk"))) {
+        if (0 > sscanf(part_name, "mmcblk%dp%d", &mmc_num, &part_num)) {
+            ERROR("%s : error in parse emmc partnum, %s\n", __func__, strerror(errno));
+            goto errout;
+        }
+        is_emmc = 1;
+    } else {
+        ERROR("%s : error parse path", __func__);
+        goto errout;
+    }
+    free(path);
+    path = NULL;
+
+    if (!is_emmc) {
+        path = calloc(sizeof(char), (strlen(MTD_PATH_FORMAT) + 10));
+        if (path) {
+            sprintf(path, MTD_PATH_FORMAT, part_num, part_num);
+            free(rec->blk_device);
+            rec->blk_device = strdup(path);
+        }
+    } else {
+        free(rec->blk_device);
+        rec->blk_device = strdup((char *)EMMC_PATH);
+        rec->partnum = part_num;
+    }
+
+    ERROR("%s : ---- part_num = %d, path = %s, is_emmc = %d\n", __func__, part_num, path, is_emmc);
+
+errout:
+    if (path)
+        free(path);
+
 }
 
 static int parse_flags(char *flags, struct flag_list *fl,
@@ -278,6 +392,7 @@ struct fstab *fs_mgr_read_fstab(const char *fstab_path)
     }
 
     if (!entries) {
+        fclose(fstab_file);
         ERROR("No entries found in fstab\n");
         goto err;
     }
@@ -316,24 +431,28 @@ struct fstab *fs_mgr_read_fstab(const char *fstab_path)
         }
 
         if (!(p = strtok_r(line, delim, &save_ptr))) {
+            fs_mgr_free_fstab(fstab);
             ERROR("Error parsing mount source\n");
             goto err;
         }
         fstab->recs[cnt].blk_device = strdup(p);
 
         if (!(p = strtok_r(NULL, delim, &save_ptr))) {
+            fs_mgr_free_fstab(fstab);
             ERROR("Error parsing mount_point\n");
             goto err;
         }
         fstab->recs[cnt].mount_point = strdup(p);
 
         if (!(p = strtok_r(NULL, delim, &save_ptr))) {
+            fs_mgr_free_fstab(fstab);
             ERROR("Error parsing fs_type\n");
             goto err;
         }
         fstab->recs[cnt].fs_type = strdup(p);
 
         if (!(p = strtok_r(NULL, delim, &save_ptr))) {
+            fs_mgr_free_fstab(fstab);
             ERROR("Error parsing mount_flags\n");
             goto err;
         }
@@ -349,6 +468,7 @@ struct fstab *fs_mgr_read_fstab(const char *fstab_path)
         }
 
         if (!(p = strtok_r(NULL, delim, &save_ptr))) {
+            fs_mgr_free_fstab(fstab);
             ERROR("Error parsing fs_mgr_options\n");
             goto err;
         }
@@ -360,6 +480,7 @@ struct fstab *fs_mgr_read_fstab(const char *fstab_path)
         fstab->recs[cnt].partnum = flag_vals.partnum;
         fstab->recs[cnt].swap_prio = flag_vals.swap_prio;
         fstab->recs[cnt].zram_size = flag_vals.zram_size;
+        parse_link_device(&(fstab->recs[cnt]));
         cnt++;
     }
     fclose(fstab_file);
@@ -546,6 +667,10 @@ int fs_mgr_mount_all(struct fstab *fstab)
             wait_for_file(fstab->recs[i].blk_device, WAIT_TIMEOUT);
         }
 
+        if (fstab->recs[i].fs_mgr_flags & MF_RESIZE) {
+            resize_fs(fstab->recs[i].blk_device, fstab->recs[i].fs_type);
+        }
+
         if (fstab->recs[i].fs_mgr_flags & MF_CHECK) {
             check_fs(fstab->recs[i].blk_device, fstab->recs[i].fs_type,
                      fstab->recs[i].mount_point);
@@ -633,6 +758,10 @@ int fs_mgr_do_mount(struct fstab *fstab, char *n_name, char *n_blk_device,
         /* First check the filesystem if requested */
         if (fstab->recs[i].fs_mgr_flags & MF_WAIT) {
             wait_for_file(n_blk_device, WAIT_TIMEOUT);
+        }
+
+        if (fstab->recs[i].fs_mgr_flags & MF_RESIZE) {
+            resize_fs(fstab->recs[i].blk_device, fstab->recs[i].fs_type);
         }
 
         if (fstab->recs[i].fs_mgr_flags & MF_CHECK) {
