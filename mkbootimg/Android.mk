@@ -2,6 +2,7 @@
 LOCAL_PATH:= $(call my-dir)
 include $(CLEAR_VARS)
 
+LOCAL_CFLAGS := -DTARGET_ROCHCHIP_RECOVERY=true
 LOCAL_SRC_FILES := mkbootimg.c
 LOCAL_STATIC_LIBRARIES := libmincrypt
 

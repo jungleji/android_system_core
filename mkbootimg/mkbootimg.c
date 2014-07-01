@@ -72,9 +72,11 @@ int usage(void)
     return 1;
 }
 
-
-
+#if TARGET_ROCHCHIP_RECOVERY == true
 static unsigned char padding[131072] = { 0, };
+#else
+static unsigned char padding[4096] = { 0, };
+#endif
 
 int write_padding(int fd, unsigned pagesize, unsigned itemsize)
 {
@@ -109,7 +111,6 @@ int main(int argc, char **argv)
     char *board = "";
     char *dt_fn = 0;
     void *dt_data = 0;
-    unsigned pagesize = 2048;
     int fd;
     SHA_CTX ctx;
     uint8_t* sha;
@@ -118,6 +119,19 @@ int main(int argc, char **argv)
     unsigned ramdisk_offset = 0x01000000;
     unsigned second_offset  = 0x00f00000;
     unsigned tags_offset    = 0x00000100;
+
+#if TARGET_ROCHCHIP_RECOVERY == true
+    base           = 0x60000000;
+    kernel_offset  = 0x00408000;
+    ramdisk_offset = 0x02000000;
+    tags_offset    = 0x00088000;
+#endif
+
+#if TARGET_ROCHCHIP_RECOVERY == true
+    unsigned pagesize = 16384;
+#else
+    unsigned pagesize = 2048;
+#endif
 
     argc--;
     argv++;
@@ -248,8 +262,15 @@ int main(int argc, char **argv)
     SHA_update(&ctx, &hdr.second_size, sizeof(hdr.second_size));
     if(dt_data) {
         SHA_update(&ctx, dt_data, hdr.dt_size);
-        SHA_update(&ctx, &hdr.dt_size, sizeof(hdr.dt_size));
     }
+#if TARGET_ROCHCHIP_RECOVERY == true
+    SHA_update(&ctx, &hdr.tags_addr, sizeof(hdr.tags_addr));
+    SHA_update(&ctx, &hdr.page_size, sizeof(hdr.page_size));
+    SHA_update(&ctx, &hdr.dt_size, sizeof(hdr.dt_size));
+    SHA_update(&ctx, &hdr.unused, sizeof(hdr.unused));
+    SHA_update(&ctx, &hdr.name, sizeof(hdr.name));
+    SHA_update(&ctx, &hdr.cmdline, sizeof(hdr.cmdline));
+#endif
     sha = SHA_final(&ctx);
     memcpy(hdr.id, sha,
            SHA_DIGEST_SIZE > sizeof(hdr.id) ? sizeof(hdr.id) : SHA_DIGEST_SIZE);
